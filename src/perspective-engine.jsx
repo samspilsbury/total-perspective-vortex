@@ -519,97 +519,286 @@ function generateCoord() {
 }
 
 function downloadCard(tier, tc, paragraphs, coord) {
-  const W = 1080, H = 1080;
+  const W = 1080;
+  const MARGIN = 64;
+  const contentW = W - MARGIN * 2;
+  const rng = (n) => { let x = Math.sin(n) * 10000; return x - Math.floor(x); };
+
+  // Measure wrapped text height without drawing
+  const measureWrapped = (ctx, text, font, maxW, lineH) => {
+    ctx.font = font;
+    const words = text.split(" ");
+    let line = "", count = 0;
+    words.forEach(w => {
+      const test = line + (line ? " " : "") + w;
+      if (ctx.measureText(test).width > maxW && line) { count++; line = w; }
+      else line = test;
+    });
+    if (line) count++;
+    return count * lineH;
+  };
+
+  // Draw wrapped text, returning new y
+  const drawWrapped = (ctx, text, font, color, maxW, lineH, x, startY, align = "left") => {
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.textAlign = align;
+    const words = text.split(" ");
+    let line = "", y = startY;
+    const ax = align === "center" ? x : x;
+    words.forEach(w => {
+      const test = line + (line ? " " : "") + w;
+      if (ctx.measureText(test).width > maxW && line) {
+        ctx.fillText(line, ax, y); y += lineH; line = w;
+      } else line = test;
+    });
+    if (line) { ctx.fillText(line, ax, y); y += lineH; }
+    return y;
+  };
+
+  // --- Measure pass to compute total canvas height ---
+  const probe = document.createElement("canvas");
+  probe.width = W; probe.height = 10;
+  const pc = probe.getContext("2d");
+
+  const ICON_SECTION   = 160;  // icon + gap
+  const HEADLINE_LH    = 64;
+  const SUB_LH         = 40;
+  const DIVIDER_GAP    = 60;
+  const PARA_LH        = 38;
+  const PARA_GAP       = 28;
+  const MAP_H          = 340;  // cosmic map
+  const FOOTER_H       = 140;  // coord + YOU ARE HERE + DON'T PANIC + url
+
+  let measuredH = 100; // top header
+  measuredH += ICON_SECTION;
+  measuredH += measureWrapped(pc, tc.headline, "900 52px sans-serif", contentW, HEADLINE_LH) + 16;
+  measuredH += measureWrapped(pc, tc.sub, "italic 400 28px monospace", contentW, SUB_LH) + DIVIDER_GAP;
+  paragraphs.forEach((para, i) => {
+    measuredH += measureWrapped(pc, para, "400 22px monospace", contentW, PARA_LH);
+    if (i < paragraphs.length - 1) measuredH += PARA_GAP;
+  });
+  measuredH += 48; // gap before map
+  measuredH += MAP_H;
+  measuredH += FOOTER_H;
+
+  const H = Math.max(1080, measuredH + 60);
+
+  // --- Draw pass ---
   const canvas = document.createElement("canvas");
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext("2d");
 
+  // Background
   ctx.fillStyle = "#060010";
   ctx.fillRect(0, 0, W, H);
 
-  const rng = (n) => { let x = Math.sin(n) * 10000; return x - Math.floor(x); };
-  for (let i = 0; i < 140; i++) {
+  // Nebula glows
+  const drawGlow = (cx, cy, rx, ry, color) => {
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(rx, ry));
+    g.addColorStop(0, color); g.addColorStop(1, "transparent");
+    ctx.save(); ctx.scale(1, ry / rx);
+    ctx.beginPath(); ctx.arc(cx, cy * rx / ry, rx, 0, Math.PI * 2);
+    ctx.fillStyle = g; ctx.fill(); ctx.restore();
+  };
+  drawGlow(W*0.15, H*0.12, 280, 200, "rgba(100,0,200,0.12)");
+  drawGlow(W*0.85, H*0.45, 320, 220, "rgba(0,140,200,0.09)");
+  drawGlow(W*0.50, H*0.85, 360, 160, "rgba(255,0,100,0.07)");
+
+  // Stars
+  for (let i = 0; i < 180; i++) {
     ctx.beginPath();
-    ctx.arc(rng(i*3+1)*W, rng(i*3+2)*H, rng(i*3+3)*1.5+0.3, 0, Math.PI*2);
-    ctx.fillStyle = `rgba(255,255,255,${0.1 + rng(i*3+4)*0.5})`;
+    ctx.arc(rng(i*3+1)*W, rng(i*3+2)*H, rng(i*3+3)*1.6+0.3, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(255,255,255,${0.12 + rng(i*3+4)*0.55})`;
     ctx.fill();
   }
 
-  ctx.strokeStyle = tc.color + "88";
+  // Scanline overlay (subtle horizontal lines)
+  for (let row = 0; row < H; row += 4) {
+    ctx.fillStyle = "rgba(0,0,0,0.06)";
+    ctx.fillRect(0, row + 3, W, 1);
+  }
+
+  // Border
+  ctx.strokeStyle = tc.color + "99";
   ctx.lineWidth = 3;
-  ctx.strokeRect(20, 20, W-40, H-40);
+  ctx.strokeRect(24, 24, W - 48, H - 48);
 
-  ctx.font = "500 20px monospace";
-  ctx.fillStyle = "rgba(232,222,255,0.5)";
+  // Header bar
+  ctx.font = "500 19px monospace";
+  ctx.fillStyle = "rgba(232,222,255,0.45)";
   ctx.textAlign = "center";
-  ctx.fillText("WHOLLY REMARKABLE DEVICES LTD · THE TOTAL PERSPECTIVE VORTEX", W/2, 66);
+  ctx.fillText("WHOLLY REMARKABLE DEVICES LTD  ·  THE TOTAL PERSPECTIVE VORTEX", W/2, 70);
 
-  const icons = { common:"·", uncommon:"◈", rare:"★" };
-  ctx.font = "900 90px sans-serif";
+  // Corner decorations
+  const corners = [[44,44],[W-44,44],[44,H-44],[W-44,H-44]];
+  corners.forEach(([cx,cy]) => {
+    ctx.strokeStyle = tc.color + "66";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cx-10, cy); ctx.lineTo(cx+10, cy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, cy-10); ctx.lineTo(cx, cy+10); ctx.stroke();
+  });
+
+  let y = 110;
+
+  // Icon
+  const iconText = { common:"·", uncommon:"◈", rare:"★" }[tier];
+  ctx.font = "900 96px sans-serif";
   ctx.fillStyle = tc.color;
   ctx.shadowColor = tc.color;
-  ctx.shadowBlur = 36;
-  ctx.fillText(icons[tier], W/2, 180);
+  ctx.shadowBlur = 48;
+  ctx.textAlign = "center";
+  ctx.fillText(iconText, W/2, y + 80);
   ctx.shadowBlur = 0;
+  y += ICON_SECTION;
 
-  const wrapText = (text, maxW, lineH, startY, font) => {
-    ctx.font = font;
-    const words = text.split(" ");
-    let line = "", y = startY;
-    words.forEach(w => {
-      const test = line + (line ? " " : "") + w;
-      if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, W/2, y); y += lineH; line = w; }
-      else line = test;
-    });
-    if (line) { ctx.fillText(line, W/2, y); y += lineH; }
-    return y;
-  };
-
-  ctx.fillStyle = tc.color;
+  // Headline
   ctx.shadowColor = tc.color;
-  ctx.shadowBlur = 18;
-  let y = wrapText(tc.headline, W-120, 62, 248, "900 50px sans-serif");
+  ctx.shadowBlur = 20;
+  y = drawWrapped(ctx, tc.headline, "900 52px sans-serif", tc.color, contentW, HEADLINE_LH, W/2, y, "center");
   ctx.shadowBlur = 0;
-  ctx.fillStyle = "rgba(232,222,255,0.8)";
-  y = wrapText(tc.sub, W-140, 38, y+8, "italic 500 26px monospace");
+  y += 16;
 
-  y += 24;
+  // Subtitle
+  y = drawWrapped(ctx, tc.sub, "italic 400 28px monospace", "rgba(232,222,255,0.82)", contentW, SUB_LH, W/2, y, "center");
+  y += 32;
+
+  // Divider
   ctx.strokeStyle = tc.color + "44";
   ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(80, y); ctx.lineTo(W-80, y); ctx.stroke();
-  y += 40;
+  ctx.beginPath(); ctx.moveTo(MARGIN, y); ctx.lineTo(W - MARGIN, y); ctx.stroke();
+  y += DIVIDER_GAP;
 
-  const snippet = paragraphs[0].slice(0, 300).trimEnd() + "…";
-  ctx.font = "400 25px monospace";
-  ctx.fillStyle = "rgba(232,222,255,0.85)";
-  ctx.textAlign = "left";
-  const words2 = snippet.split(" "); let sl = "";
-  words2.forEach(w => {
-    const t = sl + (sl?" ":"") + w;
-    if (ctx.measureText(t).width > W-160 && sl) {
-      if (y < H-200) { ctx.fillText(sl, 80, y); y += 40; }
-      sl = w;
-    } else sl = t;
+  // Story card background
+  const cardTop = y - 32;
+  const storyH_start = y;
+  const storyLines_measure = paragraphs.reduce((acc, para, i) => {
+    return acc + measureWrapped(pc, para, "400 22px monospace", contentW, PARA_LH) + (i < paragraphs.length - 1 ? PARA_GAP : 0);
+  }, 0);
+  const cardBottom = storyH_start + storyLines_measure + 32;
+
+  const cardGrad = ctx.createLinearGradient(MARGIN, cardTop, MARGIN, cardBottom);
+  cardGrad.addColorStop(0, tc.color + "10");
+  cardGrad.addColorStop(1, "rgba(6,0,16,0.92)");
+  ctx.fillStyle = cardGrad;
+  ctx.strokeStyle = tc.color + "33";
+  ctx.lineWidth = 1;
+  const r = 16;
+  ctx.beginPath();
+  ctx.moveTo(MARGIN + r, cardTop);
+  ctx.lineTo(W - MARGIN - r, cardTop);
+  ctx.quadraticCurveTo(W - MARGIN, cardTop, W - MARGIN, cardTop + r);
+  ctx.lineTo(W - MARGIN, cardBottom - r);
+  ctx.quadraticCurveTo(W - MARGIN, cardBottom, W - MARGIN - r, cardBottom);
+  ctx.lineTo(MARGIN + r, cardBottom);
+  ctx.quadraticCurveTo(MARGIN, cardBottom, MARGIN, cardBottom - r);
+  ctx.lineTo(MARGIN, cardTop + r);
+  ctx.quadraticCurveTo(MARGIN, cardTop, MARGIN + r, cardTop);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+
+  // Story paragraphs
+  paragraphs.forEach((para, i) => {
+    y = drawWrapped(ctx, para, "400 22px monospace", "rgba(232,222,255,0.88)", contentW, PARA_LH, MARGIN, y, "left");
+    if (i < paragraphs.length - 1) y += PARA_GAP;
   });
-  if (sl && y < H-200) { ctx.fillText(sl, 80, y); }
 
-  ctx.textAlign = "center";
-  ctx.font = "400 18px monospace";
-  ctx.fillStyle = "rgba(232,222,255,0.4)";
-  ctx.fillText(coord, W/2, H-110);
+  y += 48;
+
+  // --- Cosmic Map ---
+  const MAP_W = W - MARGIN * 2;
+  const mapX = MARGIN, mapY = y;
+
+  // Map background + border
+  ctx.fillStyle = "#060010";
+  ctx.strokeStyle = "rgba(232,222,255,0.14)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(mapX, mapY, MAP_W, MAP_H, 12);
+  ctx.fill(); ctx.stroke();
+
+  // Map nebula glows
+  const mapGlow = (cx, cy, rx, ry, color) => {
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(rx, ry));
+    g.addColorStop(0, color); g.addColorStop(1, "transparent");
+    ctx.save(); ctx.scale(1, ry / rx);
+    ctx.beginPath(); ctx.arc(cx, cy * rx / ry, rx, 0, Math.PI * 2);
+    ctx.fillStyle = g; ctx.fill(); ctx.restore();
+  };
+  mapGlow(mapX + MAP_W * 0.55, mapY + MAP_H * 0.35, MAP_W * 0.28, MAP_H * 0.4, "rgba(255,215,0,0.07)");
+  mapGlow(mapX + MAP_W * 0.12, mapY + MAP_H * 0.22, MAP_W * 0.18, MAP_H * 0.3, "rgba(100,150,255,0.06)");
+  mapGlow(mapX + MAP_W * 0.80, mapY + MAP_H * 0.60, MAP_W * 0.20, MAP_H * 0.3, "rgba(255,80,80,0.05)");
+
+  // Grid lines
+  ctx.strokeStyle = "rgba(232,222,255,0.04)"; ctx.lineWidth = 0.5;
+  [0.2, 0.4, 0.6, 0.8].forEach(v => {
+    ctx.beginPath(); ctx.moveTo(mapX + MAP_W * v, mapY); ctx.lineTo(mapX + MAP_W * v, mapY + MAP_H); ctx.stroke();
+  });
+  [0.25, 0.5, 0.75].forEach(v => {
+    ctx.beginPath(); ctx.moveTo(mapX, mapY + MAP_H * v); ctx.lineTo(mapX + MAP_W, mapY + MAP_H * v); ctx.stroke();
+  });
+
+  // Map stars
+  for (let i = 0; i < 80; i++) {
+    ctx.beginPath();
+    ctx.arc(mapX + rng(i*5+10)*MAP_W, mapY + rng(i*5+11)*MAP_H, rng(i*5+12)*1.2+0.2, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(255,255,255,${0.1 + rng(i*5+13)*0.5})`;
+    ctx.fill();
+  }
+
+  // Map objects
+  MAP_OBJECTS.forEach((o) => {
+    const ox = mapX + (o.x / 100) * MAP_W;
+    const oy = mapY + (o.y * 0.52 / 52) * MAP_H;
+    const or = o.r * 4;
+    // glow
+    const og = ctx.createRadialGradient(ox, oy, 0, ox, oy, or * 2.5);
+    og.addColorStop(0, o.color); og.addColorStop(1, "transparent");
+    ctx.beginPath(); ctx.arc(ox, oy, or * 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = og; ctx.fill();
+    // core
+    ctx.beginPath(); ctx.arc(ox, oy, or, 0, Math.PI * 2);
+    ctx.fillStyle = o.color; ctx.fill();
+    if (o.label) {
+      ctx.font = "500 14px monospace";
+      ctx.fillStyle = "rgba(232,222,255,0.5)";
+      ctx.textAlign = "left";
+      ctx.fillText(o.label, ox + or + 5, oy + 5);
+    }
+  });
+
+  // YOU ARE HERE marker
+  const youX = mapX + MAP_W * 0.71;
+  const youY = mapY + MAP_H * 0.43;
+  ctx.font = "bold 16px monospace";
   ctx.fillStyle = tc.color;
-  ctx.font = "700 16px monospace";
-  ctx.fillText("▲ YOU ARE HERE", W/2, H-88);
-
-  ctx.font = "900 42px monospace";
-  ctx.fillStyle = "#ff2222";
-  ctx.shadowColor = "rgba(255,34,34,0.7)";
-  ctx.shadowBlur = 20;
-  ctx.fillText("DON'T PANIC", W/2, H-50);
+  ctx.shadowColor = tc.color; ctx.shadowBlur = 10;
+  ctx.textAlign = "left";
+  ctx.fillText("▲ YOU", youX, youY);
   ctx.shadowBlur = 0;
+
+  // Coord label
+  ctx.font = "400 17px monospace";
+  ctx.fillStyle = "rgba(232,222,255,0.7)";
+  ctx.textAlign = "center";
+  ctx.fillText(coord, mapX + MAP_W / 2, mapY + MAP_H - 14);
+
+  y = mapY + MAP_H + 52;
+
+  // DON'T PANIC
+  ctx.font = "900 52px monospace";
+  ctx.fillStyle = "#ff2222";
+  ctx.shadowColor = "rgba(255,34,34,0.75)";
+  ctx.shadowBlur = 28;
+  ctx.textAlign = "center";
+  ctx.fillText("DON'T PANIC", W/2, y);
+  ctx.shadowBlur = 0;
+  y += 42;
+
+  // URL
   ctx.font = "400 18px monospace";
   ctx.fillStyle = "rgba(232,222,255,0.3)";
-  ctx.fillText("perspectiveengine.space", W/2, H-20);
+  ctx.fillText("total-perspective-vortex.vercel.app", W/2, y);
 
   const a = document.createElement("a");
   a.href = canvas.toDataURL("image/png");
@@ -951,7 +1140,7 @@ export default function PerspectiveEngine() {
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               <button className="cta"
                 onClick={()=>{
-                  const msg="Think you can survive the Perspective Engine? Most beings don't make it out intact. Find out where you stand in the cosmos: https://perspectiveengine.space";
+                  const msg="Think you can survive the Total Perspective Vortex? Most beings don't make it out intact. Find out where you stand in the cosmos: https://total-perspective-vortex.vercel.app/";
                   navigator.clipboard?.writeText(msg);
                   setCopied(true);
                   setTimeout(()=>setCopied(false),3000);
